@@ -1,15 +1,11 @@
 import discord
+from dotenv import load_dotenv
 import os
 import json
 import random
 import asyncio
 from datetime import datetime
 from discord.ext import commands
-import webserver
-
-TOKEN = os.getenv('dctoken')
-if not TOKEN:
-    raise ValueError("Discord bot token not found in environment variables")
 
 DBFILE = 'database.json'
 
@@ -51,18 +47,18 @@ class LootSystem:
     def generate_loot(player_luck=0):
         loot = {'pots': {}, 'coins': 0}
         
-        pot_chance = 0.3 + (player_luck * 0.01)
-        coin_chance = 0.4 + (player_luck * 0.01)
+        pot_chance = 0.2 + (player_luck * 0.008) 
+        coin_chance = 0.3 + (player_luck * 0.008)
         
         if random.random() < pot_chance:
             for pot, data in GameData.POTS.items():
-                modified_chance = data['chance'] + (player_luck * 0.005)
+                modified_chance = data['chance'] + (player_luck * 0.003)
                 if random.random() < modified_chance:
                     loot['pots'][pot] = 1
-        
+
         if random.random() < coin_chance:
-            base_coins = random.randint(5, 10)
-            luck_bonus = int(player_luck * 0.5)
+            base_coins = random.randint(3, 8)
+            luck_bonus = int(player_luck * 0.3)
             loot['coins'] = base_coins + luck_bonus
             
         return loot
@@ -106,10 +102,11 @@ class CharCreate:
             pots = {}
         self.user_id = user_id
         self.name = name
-        self.atk = atk
-        self.def_ = def_
-        self.eva = eva
-        self.luk = luk
+        # Round initial stats to 1 decimal
+        self.atk = round(atk * 2, 1)
+        self.def_ = round(def_ * 2, 1)
+        self.eva = round(eva * 2, 1)
+        self.luk = round(luk * 2, 1)
         self.level = level
         self.coins = coins
         self.pots = pots
@@ -192,38 +189,38 @@ class CharacterCreateModal(discord.ui.Modal, title="Create Your Character"):
 class Monster:
     MONSTER_TYPES = {
         'Slime': {
-            'base_hp': 20,
-            'base_atk': 5,  # Increased base attack
+            'base_hp': 25,
+            'base_atk': 4,
             'base_def': 2,
-            'hp_per_level': 5,
-            'atk_per_level': 2.5,  # Increased attack scaling
+            'hp_per_level': 6,
+            'atk_per_level': 1.8,
             'def_per_level': 0.7,
             'weight': 0.4
         },
         'Wolf': {
-            'base_hp': 15,
-            'base_atk': 8,  # Increased base attack
+            'base_hp': 20,
+            'base_atk': 6,
             'base_def': 3,
-            'hp_per_level': 3,
-            'atk_per_level': 3.5,  # Increased attack scaling
+            'hp_per_level': 4,
+            'atk_per_level': 2.2,
             'def_per_level': 0.8,
             'weight': 0.3
         },
         'Goblin': {
-            'base_hp': 25,
-            'base_atk': 7,  # Increased base attack
+            'base_hp': 30,
+            'base_atk': 5,  
             'base_def': 4,
-            'hp_per_level': 4,
-            'atk_per_level': 3.0,  # Increased attack scaling
+            'hp_per_level': 5,
+            'atk_per_level': 2.0, 
             'def_per_level': 1.2,
             'weight': 0.2
         },
         'Orc': {
-            'base_hp': 35,
-            'base_atk': 10,  # Increased base attack
+            'base_hp': 40,
+            'base_atk': 7, 
             'base_def': 5,
-            'hp_per_level': 6,
-            'atk_per_level': 4.0,  # Increased attack scaling
+            'hp_per_level': 7,
+            'atk_per_level': 2.5,
             'def_per_level': 1.5,
             'weight': 0.1
         }
@@ -319,7 +316,7 @@ class CombatSystem:
             try:
                 await interaction.response.defer()
                 await self.update_message(embed)
-            except:
+            except discord.InteractionResponded:
                 await self.update_message(embed)
         
         await self.run_combat_loop()
@@ -331,36 +328,52 @@ class CombatSystem:
             if self.player['current_hp'] <= 0 or self.monster.hp <= 0:
                 break
 
-            total_atk = self.player['atk']
-            total_def = self.player['def']
-            
-            for effect, data in self.active_effects.items():
-                if effect == 'attack':
-                    total_atk += data['value']
-                elif effect == 'defense':
-                    total_def += data['value']
-
-            base_damage = max(1, total_atk - self.monster.def_)
-            damage_roll = random.uniform(0.8, 1.2)
-            damage_to_monster = max(1, int(base_damage * damage_roll))
-            
-            self.monster.hp = max(0, self.monster.hp - damage_to_monster)
-            self.combat_log.append(f"🗡️ You deal {damage_to_monster} damage!")
-
+            self.apply_effects()
+            self.player_attack()
             if self.monster.hp > 0:
-                base_monster_damage = max(1, self.monster.atk - total_def)
-                monster_damage_roll = random.uniform(0.8, 1.2)
-                damage_to_player = max(1, int(base_monster_damage * monster_damage_roll))
-                
-                if random.random() > self.player['eva'] * 0.01:
-                    self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
-                    self.combat_log.append(f"💥 Monster deals {damage_to_player} damage!")
-                else:
-                    self.combat_log.append("✨ You evaded the attack!")
+                self.monster_attack()
+            
+            if self.monster.hp <= 0:
+                self.active_effects.clear()
 
             self.combat_log = self.combat_log[-3:]
             await self.update_message(self.create_combat_embed())
 
+        await self.end_combat()
+
+    def apply_effects(self):
+        total_atk = self.player['atk']
+        total_def = self.player['def']
+        
+        for effect, data in self.active_effects.items():
+            if effect == 'attack':
+                total_atk += data['value']
+            elif effect == 'defense':
+                total_def += data['value']
+
+        self.total_atk = total_atk
+        self.total_def = total_def
+
+    def player_attack(self):
+        base_damage = max(1, self.total_atk - self.monster.def_)
+        damage_roll = random.uniform(0.8, 1.2)
+        damage_to_monster = max(1, int(base_damage * damage_roll))
+        
+        self.monster.hp = max(0, self.monster.hp - damage_to_monster)
+        self.combat_log.append(f"🗡️ You deal {damage_to_monster} damage!")
+
+    def monster_attack(self):
+        base_monster_damage = max(1, self.monster.atk - self.total_def)
+        monster_damage_roll = random.uniform(0.8, 1.2)
+        damage_to_player = max(1, int(base_monster_damage * monster_damage_roll))
+        
+        if random.random() > self.player['eva'] * 0.01:
+            self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
+            self.combat_log.append(f"💥 Monster deals {damage_to_player} damage!")
+        else:
+            self.combat_log.append("✨ You evaded the attack!")
+
+    async def end_combat(self):
         if self.player['current_hp'] <= 0:
             await self.handle_player_death()
         elif self.monster.hp <= 0:
@@ -372,30 +385,31 @@ class CombatSystem:
                 await self.message.edit(embed=embed, view=view)
             except discord.NotFound:
                 pass
-
+        
     async def handle_victory(self):
-        self.active_effects.clear()
-        exp_gained = self.monster.level * 5
+        exp_gained = self.monster.level * 4
         self.player['current_exp'] += exp_gained
+        level_up_message = ""
         
         if self.player['current_exp'] >= 100:
             self.player['level'] += 1
             self.player['current_exp'] = 0
-            self.player['atk'] += 0.8
-            self.player['def'] += 1
-            self.player['eva'] += 0.6
-            self.player['luk'] += 0.5
+            # Round stat increases to 1 decimal
+            self.player['atk'] = round(self.player['atk'] + 0.6, 1)
+            self.player['def'] = round(self.player['def'] + 0.7, 1)
+            self.player['eva'] = round(self.player['eva'] + 0.4, 1)
+            self.player['luk'] = round(self.player['luk'] + 0.3, 1)
             
+            heal_amount = 40
             old_hp = self.player['current_hp']
-            self.player['current_hp'] = min(self.player['max_hp'], old_hp + 50)
-            heal_amount = self.player['current_hp'] - old_hp
+            self.player['current_hp'] = min(self.player['max_hp'], old_hp + heal_amount)
             
             level_up_message = (
-                f"🎊 Level Up! Now level {self.player['level']}\n"
-                f"💚 Healed for {heal_amount} HP!"
+                "🎊 **LEVEL UP!**\n"
+                f"You are now level {self.player['level']}!\n"
+                f"Your stats have increased!\n"
+                f"Healed for {heal_amount} HP!"
             )
-        else:
-            level_up_message = ""
 
         loot = LootSystem.generate_loot(self.player['luk'])
         self.player['coins'] += loot['coins']
@@ -425,36 +439,32 @@ class CombatSystem:
 
     def create_combat_embed(self):
         embed = discord.Embed(
-            title=f"⚔️ Combat Arena ⚔️",
+            title="⚔️ Combat Arena ⚔️",
             color=discord.Color.blue()
         )
         embed.description = "═" * 30
-        
-        total_atk = self.player['atk']
-        total_def = self.player['def']
-        
+                
         buff_text_atk = ""
         buff_text_def = ""
-        
-        if 'attack' in self.active_effects:
-            total_atk += self.active_effects['attack']['value']
-            buff_text_atk = f" (+{self.active_effects['attack']['value']})"
-        if 'defense' in self.active_effects:
-            total_def += self.active_effects['defense']['value']
-            buff_text_def = f" (+{self.active_effects['defense']['value']})"
-        
+            
+        for effect, data in self.active_effects.items():
+            if effect == 'attack':
+                buff_text_atk = f" (+{data['value']})"
+            elif effect == 'defense':
+                buff_text_def = f" (+{data['value']})"
+            
         player_status = [
-            f"",
+            "",
             f"❤️ HP: {self.player['current_hp']}/{self.player['max_hp']}",
-            f"",
-            f"⚔️ ATK: {int(self.player['atk'])}{buff_text_atk}",  # Show buff
-            f"",
-            f"🛡️ DEF: {int(self.player['def'])}{buff_text_def}",  # Show buff
-            f"",
+            "",
+            f"⚔️ ATK: {int(self.player['atk'])}{buff_text_atk}",
+            "",
+            f"🛡️ DEF: {int(self.player['def'])}{buff_text_def}",
+            "",
             f"💨 EVA: {self.player['eva']}",
-            f"",
+            "",
             f"🍀 LUK: {self.player['luk']}",
-            f"",
+            "",
             f"📊 EXP: {self.player['current_exp']}/100",
             ""
         ]
@@ -466,11 +476,11 @@ class CombatSystem:
         )
         
         monster_status = [
-            f"",
+            "",
             f"❤️ HP: {self.monster.hp}",
-            f"",
+            "",
             f"⚔️ ATK: {self.monster.atk}",
-            f"",
+            "",
             f"🛡️ DEF: {self.monster.def_}",
             ""
         ]
@@ -540,7 +550,7 @@ class CombatSystem:
             self.active_effects['damage'] = {
                 'value': pot_data['value']
             }
-            self.combat_log = [f"💥 Preparing to use damage potion..."]
+            self.combat_log = ["💥 Preparing to use damage potion..."]
         
         else:
             self.active_effects[pot_data['effect']] = {
@@ -575,8 +585,9 @@ class CombatSystem:
         except discord.InteractionResponded:
             await self.message.edit(embed=pot_embed, view=view)
     
-    async def end_combat_session(self, interaction):
+    async def end_combat_session(self, interaction=None):
         self.is_combat_ended = True
+        self.active_effects.clear()
         
         initial_exp = self.player['current_exp']
         initial_level = self.player['level']
@@ -632,6 +643,16 @@ class CombatSystem:
         )
         
         summary_embed.set_footer(text="Thanks for playing! Use /combat to start a new session.")
+        
+        if interaction:
+            try:
+                await interaction.response.defer()
+            except discord.InteractionResponded:
+                pass
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as e:
+                print(f"Error deferring interaction: {e}")
         
         await self.update_message(summary_embed)
 
@@ -778,32 +799,14 @@ async def rankings(interaction: discord.Interaction):
     embed.set_footer(text="May their legends live forever")
     await interaction.response.send_message(embed=embed)
 
-webserver.keep_alive()
-
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Roguelike"))
-    try:
-        await bot.tree.sync()
-        print("Slash commands synchronized successfully.")
-    except Exception as e:
-        print(f"Failed to synchronize commands: {e}")
+    await bot.tree.sync()
 
-async def start_bot():
-    while True:
-        try:
-            await bot.start(TOKEN)
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            print("Reconnecting in 3 seconds...")
-            await asyncio.sleep(3)
-        else:
-            print("Reconnected successfully.")
-            break
+def run_bot():
+    load_dotenv()
+    token = os.getenv('DISCORD_BOT_TOKEN')
+    bot.run(token)
 
-async def main():
-    await start_bot()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+run_bot()
