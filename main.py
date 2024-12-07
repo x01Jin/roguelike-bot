@@ -20,25 +20,44 @@ class GameData:
             'effect': 'heal',
             'value': 10,
             'chance': 0.5,
-            'description': '💚 Heals 10 HP'
+            'description': '💚 Heals 10 HP',
+            'price': 50
         },
         'atk_pot': {
             'effect': 'attack',
             'value': 3,
             'chance': 0.6,
-            'description': '⚔️ +3 ATK for next combat'
+            'description': '⚔️ +3 ATK for next combat',
+            'price': 60
         },
         'def_pot': {
             'effect': 'defense',
             'value': 3,
             'chance': 0.6,
-            'description': '🛡️ +3 DEF for next combat'
+            'description': '🛡️ +3 DEF for next combat',
+            'price': 60
         },
         'dmg_pot': {
             'effect': 'damage',
             'value': [10, 20],
             'chance': 0.3,
-            'description': '💥 10-20 damage to enemy'
+            'description': '💥 10-20 damage to enemy',
+            'price': 80
+        }
+    }
+    
+    SPECIAL_POTS = {
+        'exp_pot': {
+            'effect': 'exp',
+            'value': 50,
+            'description': '📊 Grants 50 EXP',
+            'price': 250
+        },
+        'hp_pot_plus': {
+            'effect': 'heal',
+            'value': 50,
+            'description': '💚 Heals 50 HP',
+            'price': 100
         }
     }
 
@@ -536,7 +555,15 @@ class CombatSystem:
         if self.player['pots'].get(pot_name, 0) <= 0:
             return
 
-        pot_data = GameData.POTS[pot_name]
+        pot_data = None
+        if pot_name in GameData.POTS:
+            pot_data = GameData.POTS[pot_name]
+        elif pot_name in GameData.SPECIAL_POTS:
+            pot_data = GameData.SPECIAL_POTS[pot_name]
+        
+        if not pot_data:
+            return
+
         self.player['pots'][pot_name] -= 1
         
         if pot_data['effect'] == 'heal':
@@ -545,18 +572,16 @@ class CombatSystem:
             self.player['current_hp'] = min(self.player['max_hp'], old_hp + heal_amount)
             actual_heal = self.player['current_hp'] - old_hp
             self.combat_log = [f"💚 Healed for {actual_heal} HP!"]
-        
+        elif pot_data['effect'] in ['attack', 'defense']:
+            self.active_effects[pot_data['effect']] = {
+                'value': pot_data['value']
+            }
+            self.combat_log = [f"✨ {pot_data['effect'].title()} buff activated!"]
         elif pot_data['effect'] == 'damage':
             self.active_effects['damage'] = {
                 'value': pot_data['value']
             }
             self.combat_log = ["💥 Preparing to use damage potion..."]
-        
-        else:
-            self.active_effects[pot_data['effect']] = {
-                'value': pot_data['value']
-            }
-            self.combat_log = [f"✨ {pot_data['effect'].title()} buff activated!"]
 
         self.save_player_data()
         await self.start_combat(interaction)
@@ -574,7 +599,12 @@ class CombatSystem:
         pot_sections = []
         for pot_name, quantity in self.player['pots'].items():
             if quantity > 0:
-                desc = GameData.POTS[pot_name]['description']
+                if pot_name in GameData.POTS:
+                    desc = GameData.POTS[pot_name]['description']
+                elif pot_name in GameData.SPECIAL_POTS:
+                    desc = GameData.SPECIAL_POTS[pot_name]['description']
+                else:
+                    continue
                 pot_sections.append(f"{desc} (x{quantity})")
         
         pot_embed.description = "\n".join(pot_sections)
@@ -687,13 +717,14 @@ class PotionButtons(discord.ui.View):
             'heal_pot': '💚 Healing Pot',
             'atk_pot': '⚔️ Attack Pot',
             'def_pot': '🛡️ Defense Pot',
-            'dmg_pot': '💥 Damage Pot'
+            'dmg_pot': '💥 Damage Pot',
+            'hp_pot_plus': '💚 Greater Healing Pot'
         }
 
         for pot_name, quantity in available_pots.items():
             if quantity > 0:
                 button = discord.ui.Button(
-                    label=f"{pot_labels[pot_name]} ({quantity})",
+                    label=f"{pot_labels.get(pot_name, pot_name.replace('_', ' ').title())} ({quantity})",
                     style=discord.ButtonStyle.primary,
                     custom_id=pot_name
                 )
@@ -714,6 +745,154 @@ class PotionButtons(discord.ui.View):
 
     async def exit_callback(self, interaction):
         await self.combat_system.end_combat_session(interaction)
+
+class ShopSystem:
+    def __init__(self, player_data):
+        self.player = player_data
+        self.message = None
+
+    def create_shop_embed(self):
+        embed = discord.Embed(
+            title="🏪 Item Shop",
+            description=f"Your Coins: 💰 {self.player['coins']}",
+            color=discord.Color.gold()
+        )
+
+        special_items = []
+        for item_id, data in GameData.SPECIAL_POTS.items():
+            special_items.append(
+                f"**{data['description']}**\n"
+                f"💰 Price: {data['price']} coins\n"
+            )
+        
+        normal_items = []
+        for item_id, data in GameData.POTS.items():
+            normal_items.append(
+                f"**{data['description']}**\n"
+                f"💰 Price: {data['price']} coins\n"
+            )
+
+        if special_items:
+            embed.add_field(
+                name="✨ Special Items",
+                value="\n".join(special_items),
+                inline=False
+            )
+        
+        if normal_items:
+            embed.add_field(
+                name="📦 Regular Items",
+                value="\n".join(normal_items),
+                inline=False
+            )
+
+        return embed
+
+    async def show_shop(self, interaction):
+        embed = self.create_shop_embed()
+        view = ShopButtons(self)
+        
+        if not self.message:
+            await interaction.response.send_message(embed=embed, view=view)
+            self.message = await interaction.original_response()
+        else:
+            await self.message.edit(embed=embed, view=view)
+
+    async def purchase_item(self, interaction, item_id):
+        item_data = (GameData.SPECIAL_POTS.get(item_id) or 
+                    GameData.POTS.get(item_id))
+        
+        if not item_data:
+            return
+            
+        if self.player['coins'] < item_data['price']:
+            await interaction.response.send_message(
+                "❌ Not enough coins!", 
+                ephemeral=True
+            )
+            return
+
+        self.player['coins'] -= item_data['price']
+        
+        if item_id == 'exp_pot':
+            self.player['current_exp'] = min(
+                99, 
+                self.player['current_exp'] + item_data['value']
+            )
+        else:
+            if item_id not in self.player['pots']:
+                self.player['pots'][item_id] = 0
+            self.player['pots'][item_id] += 1
+
+        with open(DBFILE, 'r+') as f:
+            data = json.load(f)
+            data[self.player['user_id']] = self.player
+            f.seek(0)
+            json.dump(data, f, indent=4)
+            f.truncate()
+
+        await interaction.response.defer()
+        await self.show_shop(interaction)
+
+class ShopButtons(discord.ui.View):
+    def __init__(self, shop_system):
+        super().__init__(timeout=None)
+        self.shop = shop_system
+        self.add_shop_buttons()
+
+    def add_shop_buttons(self):
+        for item_id, data in GameData.SPECIAL_POTS.items():
+            button = discord.ui.Button(
+                label=f"{item_id.replace('_', ' ').title()} ({data['price']}💰)",
+                style=discord.ButtonStyle.primary,
+                custom_id=item_id,
+                disabled=self.shop.player['coins'] < data['price']
+            )
+            button.callback = self.create_callback(item_id)
+            self.add_item(button)
+
+        for item_id, data in GameData.POTS.items():
+            button = discord.ui.Button(
+                label=f"{item_id.replace('_', ' ').title()} ({data['price']}💰)",
+                style=discord.ButtonStyle.secondary,
+                custom_id=item_id,
+                disabled=self.shop.player['coins'] < data['price']
+            )
+            button.callback = self.create_callback(item_id)
+            self.add_item(button)
+
+        exit_button = discord.ui.Button(
+            label="Exit",
+            style=discord.ButtonStyle.danger
+        )
+        exit_button.callback = self.exit_callback
+        self.add_item(exit_button)
+
+    def create_callback(self, item_id: str):
+        async def callback(interaction):
+            await self.shop.purchase_item(interaction, item_id)
+        return callback
+
+    async def exit_callback(self, interaction):
+        await interaction.message.delete()
+
+@bot.tree.command(name="shop", description="Browse and purchase items")
+async def shop(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    
+    if not Utils.user_has_character(user_id):
+        await interaction.response.send_message(
+            "Create a character first!", 
+            ephemeral=True
+        )
+        return
+
+    with open(DBFILE, 'r') as f:
+        data = json.load(f)
+        player_data = data[user_id]
+
+    shop_system = ShopSystem(player_data)
+    await shop_system.show_shop(interaction)
 
 @bot.tree.command(name="combat", description="Enter combat with a monster")
 async def combat(interaction: discord.Interaction):
