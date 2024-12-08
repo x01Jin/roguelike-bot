@@ -437,8 +437,8 @@ class CombatSystem:
         self.total_def = total_def
 
     def player_attack(self):
-        base_damage = max(1, self.total_atk - self.monster.def_)
-        damage_roll = random.uniform(0.6, 1.4)
+        base_damage = self.total_atk - (self.monster.def_ * 0.5)
+        damage_roll = random.uniform(0.8, 1.2)
         damage_to_monster = max(1, int(base_damage * damage_roll))
         
         crit_chance = min(0.25, self.player['luk'] * 0.01)
@@ -451,20 +451,21 @@ class CombatSystem:
         self.monster.hp = max(0, self.monster.hp - damage_to_monster)
 
     def monster_attack(self):
-        base_monster_damage = max(1, self.monster.atk - self.total_def)
-        monster_damage_roll = random.uniform(0.6, 1.4)
+        base_monster_damage = self.monster.atk - (self.total_def * 0.5)
+        monster_damage_roll = random.uniform(0.8, 1.2)
         damage_to_player = max(1, int(base_monster_damage * monster_damage_roll))
         
         if random.random() > (1 - min(0.75, self.player['eva'] * 0.015)):
             self.combat_log.append("✨ You evaded the attack!")
+            return
+        
+        if random.random() < 0.10:
+            damage_to_player = int(damage_to_player * 1.5)
+            self.combat_log.append(f"💥 CRITICAL HIT! Monster deals {damage_to_player} damage!")
         else:
-            if random.random() < 0.10:
-                damage_to_player = int(damage_to_player * 1.5)
-                self.combat_log.append(f"💥 CRITICAL HIT! Monster deals {damage_to_player} damage!")
-            else:
-                self.combat_log.append(f"☠️ Monster deals {damage_to_player} damage!")
-            
-            self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
+            self.combat_log.append(f"☠️ Monster deals {damage_to_player} damage!")
+        
+        self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
 
     async def end_combat(self):
         if self.player['current_hp'] <= 0:
