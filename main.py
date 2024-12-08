@@ -140,11 +140,10 @@ class CharCreate:
             pots = {}
         self.user_id = user_id
         self.name = name
-        # Round initial stats to 1 decimal
-        self.atk = round(atk * 2, 1)
-        self.def_ = round(def_ * 2, 1)
-        self.eva = round(eva * 2, 1)
-        self.luk = round(luk * 2, 1)
+        self.atk = float(atk) if float(atk) % 1 != 0 else int(atk)
+        self.def_ = float(def_) if float(def_) % 1 != 0 else int(def_)
+        self.eva = float(eva) if float(eva) % 1 != 0 else int(eva)
+        self.luk = float(luk) if float(luk) % 1 != 0 else int(luk)
         self.level = level
         self.coins = coins
         self.pots = pots
@@ -186,7 +185,15 @@ class CharCreate:
 
     def level_up(self):
         self.level += 1
-        self.current_exp = 0
+        self.atk = round(self.atk + 0.6, 1)
+        self.def_ = round(self.def_ + 0.7, 1)
+        self.eva = round(self.eva + 0.4, 1)
+        self.luk = round(self.luk + 0.3, 1)
+        
+        self.atk = int(self.atk) if self.atk % 1 == 0 else self.atk
+        self.def_ = int(self.def_) if self.def_ % 1 == 0 else self.def_
+        self.eva = int(self.eva) if self.eva % 1 == 0 else self.eva
+        self.luk = int(self.luk) if self.luk % 1 == 0 else self.luk
 
 class CharacterCreateModal(discord.ui.Modal, title="Create Your Character"):
     req1 = "Total stat points cannot exceed 25."
@@ -214,10 +221,10 @@ class CharacterCreateModal(discord.ui.Modal, title="Create Your Character"):
         char = CharCreate(
             user_id=str(interaction.user.id),
             name=self.name.value,
-            atk=atk * 2,
-            def_=def_ * 2,
-            eva=eva * 2,
-            luk=luk * 2,
+            atk=atk,
+            def_=def_,
+            eva=eva,
+            luk=luk,
             coins=0,
             pots={}
         )
@@ -230,37 +237,33 @@ class Monster:
             'base_hp': 25,
             'base_atk': 4,
             'base_def': 2,
-            'hp_per_level': 6,
             'atk_per_level': 1.8,
             'def_per_level': 0.7,
-            'weight': 0.4
+            'weight': 0.35
         },
         'Wolf': {
             'base_hp': 20,
             'base_atk': 6,
             'base_def': 3,
-            'hp_per_level': 4,
             'atk_per_level': 2.2,
             'def_per_level': 0.8,
-            'weight': 0.3
+            'weight': 0.35
         },
         'Goblin': {
             'base_hp': 30,
             'base_atk': 5,  
             'base_def': 4,
-            'hp_per_level': 5,
             'atk_per_level': 2.0, 
             'def_per_level': 1.2,
-            'weight': 0.2
+            'weight': 0.25
         },
         'Orc': {
             'base_hp': 40,
             'base_atk': 7, 
             'base_def': 5,
-            'hp_per_level': 7,
             'atk_per_level': 2.5,
             'def_per_level': 1.5,
-            'weight': 0.1
+            'weight': 0.05
         }
     }
 
@@ -270,7 +273,7 @@ class Monster:
         stats = self.MONSTER_TYPES[monster_type]
         
         self.name = f"Lv.{level} {monster_type}"
-        self.hp = int(stats['base_hp'] + (stats['hp_per_level'] * (level - 1)))
+        self.hp = min(100, int(stats['base_hp'] + (10 * (level - 1))))
         self.atk = int(stats['base_atk'] + (stats['atk_per_level'] * (level - 1)))
         self.def_ = int(stats['base_def'] + (stats['def_per_level'] * (level - 1)))
 
@@ -324,18 +327,48 @@ class HighScoreSystem:
             return []
 
 class CombatSystem:
-    def __init__(self, player_data, level_range=None):
+    def __init__(self, player_data):
         self.player = player_data
-        self.level_range = level_range or (max(1, self.player['level'] - 1), self.player['level'] + 1)
-        self.monster = Monster(random.randint(*self.level_range))
         self.combat_log = []
         self.active_effects = {}
         self.message = None
         self.is_combat_ended = False
+        self.generate_monster()
+
+    def generate_monster(self):
+        player_level = self.player['level']
+        min_level = max(1, player_level - 2)
+        max_level = player_level + 2
+        possible_levels = list(range(min_level, max_level + 1))
+        weights = []
+        
+        for level in possible_levels:
+            if level == player_level:
+                weights.append(0.4)
+            elif level < player_level:
+                weights.append(0.35 / len([l for l in possible_levels if l < player_level]))
+            else:
+                weights.append(0.25 / len([l for l in possible_levels if l > player_level]))
+        
+        monster_level = random.choices(possible_levels, weights=weights)[0]
+        
+        level_diff = monster_level - player_level
+        scaling_factor = 1 + (0.1 * level_diff)
+        
+        self.monster = Monster(monster_level)
+        
+        if level_diff > 0:
+            self.monster.atk = int(self.monster.atk * 0.9)
+            self.monster.def_ = int(self.monster.def_ * 0.9)
+        elif level_diff < 0:
+            self.monster.atk = int(self.monster.atk * 1.1)
+            self.monster.def_ = int(self.monster.def_ * 1.1)
+
+        self.monster.hp = int(min(100, self.monster.hp * scaling_factor))
 
     async def start_combat(self, interaction):
         self.is_combat_ended = False
-        self.monster = Monster(random.randint(*self.level_range))
+        self.generate_monster()
         
         if 'damage' in self.active_effects:
             damage = random.randint(*GameData.POTS['dmg_pot']['value'])
@@ -348,14 +381,14 @@ class CombatSystem:
         embed = self.create_combat_embed()
         
         if not self.message:
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, view=CombatButtons(self))
             self.message = await interaction.original_response()
         else:
             try:
                 await interaction.response.defer()
-                await self.update_message(embed)
+                await self.update_message(embed, view=CombatButtons(self))
             except discord.InteractionResponded:
-                await self.update_message(embed)
+                await self.update_message(embed, view=CombatButtons(self))
         
         await self.run_combat_loop()
 
@@ -432,7 +465,6 @@ class CombatSystem:
         if self.player['current_exp'] >= 100:
             self.player['level'] += 1
             self.player['current_exp'] = 0
-            # Round stat increases to 1 decimal
             self.player['atk'] = round(self.player['atk'] + 0.6, 1)
             self.player['def'] = round(self.player['def'] + 0.7, 1)
             self.player['eva'] = round(self.player['eva'] + 0.4, 1)
