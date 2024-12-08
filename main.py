@@ -95,7 +95,7 @@ class LootSystem:
                     loot['pots'][pot] = 1
 
         if random.random() < coin_chance:
-            base_coins = random.randint(3, 8)
+            base_coins = random.randint(20, 50)
             luck_bonus = int(player_luck * 0.3)
             loot['coins'] = base_coins + luck_bonus
             
@@ -186,9 +186,9 @@ class CharCreate:
     def level_up(self):
         self.level += 1
         self.atk = round(self.atk + 0.6, 1)
-        self.def_ = round(self.def_ + 0.7, 1)
-        self.eva = round(self.eva + 0.4, 1)
-        self.luk = round(self.luk + 0.3, 1)
+        self.def_ = round(self.def_ + 0.5, 1)
+        self.eva = round(self.eva + 0.7, 1)
+        self.luk = round(self.luk + 0.5, 1)
         
         self.atk = int(self.atk) if self.atk % 1 == 0 else self.atk
         self.def_ = int(self.def_) if self.def_ % 1 == 0 else self.def_
@@ -234,35 +234,35 @@ class CharacterCreateModal(discord.ui.Modal, title="Create Your Character"):
 class Monster:
     MONSTER_TYPES = {
         'Slime': {
-            'base_hp': 25,
-            'base_atk': 4,
-            'base_def': 2,
-            'atk_per_level': 1.8,
-            'def_per_level': 0.7,
+            'base_hp': 20,
+            'base_atk': 3,
+            'base_def': 1,
+            'atk_per_level': 0.5,
+            'def_per_level': 0.3,
             'weight': 0.35
         },
         'Wolf': {
-            'base_hp': 20,
-            'base_atk': 6,
-            'base_def': 3,
-            'atk_per_level': 2.2,
-            'def_per_level': 0.8,
+            'base_hp': 25,
+            'base_atk': 4,
+            'base_def': 2,
+            'atk_per_level': 0.7,
+            'def_per_level': 0.4,
             'weight': 0.35
         },
         'Goblin': {
             'base_hp': 30,
-            'base_atk': 5,  
-            'base_def': 4,
-            'atk_per_level': 2.0, 
-            'def_per_level': 1.2,
+            'base_atk': 5,
+            'base_def': 3,
+            'atk_per_level': 0.8,
+            'def_per_level': 0.5,
             'weight': 0.25
         },
         'Orc': {
-            'base_hp': 40,
-            'base_atk': 7, 
-            'base_def': 5,
-            'atk_per_level': 2.5,
-            'def_per_level': 1.5,
+            'base_hp': 35,
+            'base_atk': 6,
+            'base_def': 4,
+            'atk_per_level': 1.0,
+            'def_per_level': 0.6,
             'weight': 0.05
         }
     }
@@ -340,7 +340,9 @@ class CombatSystem:
             'eva': self.player['eva'],
             'luk': self.player['luk']
         }
-        self.generate_monster()
+        self.monster = None
+        self.next_monster = None
+        self.next_monster = self.generate_monster()
 
     def generate_monster(self):
         player_level = self.player['level']
@@ -358,24 +360,26 @@ class CombatSystem:
                 weights.append(0.25 / len([l for l in possible_levels if l > player_level]))
         
         monster_level = random.choices(possible_levels, weights=weights)[0]
+        new_monster = Monster(monster_level)
         
         level_diff = monster_level - player_level
         scaling_factor = 1 + (0.1 * level_diff)
         
-        self.monster = Monster(monster_level)
-        
         if level_diff > 0:
-            self.monster.atk = int(self.monster.atk * 0.9)
-            self.monster.def_ = int(self.monster.def_ * 0.9)
+            new_monster.atk = int(new_monster.atk * 0.9)
+            new_monster.def_ = int(new_monster.def_ * 0.9)
         elif level_diff < 0:
-            self.monster.atk = int(self.monster.atk * 1.1)
-            self.monster.def_ = int(self.monster.def_ * 1.1)
+            new_monster.atk = int(new_monster.atk * 1.1)
+            new_monster.def_ = int(new_monster.def_ * 1.1)
 
-        self.monster.hp = int(min(100, self.monster.hp * scaling_factor))
+        new_monster.hp = int(min(100, new_monster.hp * scaling_factor))
+        return new_monster
 
     async def start_combat(self, interaction):
         self.is_combat_ended = False
-        self.generate_monster()
+        
+        self.monster = self.next_monster
+        self.next_monster = self.generate_monster()
         
         if 'damage' in self.active_effects:
             damage = random.randint(*GameData.POTS['dmg_pot']['value'])
@@ -388,14 +392,14 @@ class CombatSystem:
         embed = self.create_combat_embed()
         
         if not self.message:
-            await interaction.response.send_message(embed=embed, view=CombatButtons(self))
+            await interaction.response.send_message(embed=embed)
             self.message = await interaction.original_response()
         else:
             try:
                 await interaction.response.defer()
-                await self.update_message(embed, view=CombatButtons(self))
+                await self.update_message(embed)
             except discord.InteractionResponded:
-                await self.update_message(embed, view=CombatButtons(self))
+                await self.update_message(embed)
         
         await self.run_combat_loop()
 
@@ -434,22 +438,33 @@ class CombatSystem:
 
     def player_attack(self):
         base_damage = max(1, self.total_atk - self.monster.def_)
-        damage_roll = random.uniform(0.8, 1.2)
+        damage_roll = random.uniform(0.6, 1.4)
         damage_to_monster = max(1, int(base_damage * damage_roll))
         
+        crit_chance = min(0.25, self.player['luk'] * 0.01)
+        if random.random() < crit_chance:
+            damage_to_monster = int(damage_to_monster * 1.5)
+            self.combat_log.append(f"💥 CRITICAL HIT! You deal {damage_to_monster} damage!")
+        else:
+            self.combat_log.append(f"🗡️ You deal {damage_to_monster} damage!")
+        
         self.monster.hp = max(0, self.monster.hp - damage_to_monster)
-        self.combat_log.append(f"🗡️ You deal {damage_to_monster} damage!")
 
     def monster_attack(self):
         base_monster_damage = max(1, self.monster.atk - self.total_def)
-        monster_damage_roll = random.uniform(0.8, 1.2)
+        monster_damage_roll = random.uniform(0.6, 1.4)
         damage_to_player = max(1, int(base_monster_damage * monster_damage_roll))
         
-        if random.random() > self.player['eva'] * 0.01:
-            self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
-            self.combat_log.append(f"💥 Monster deals {damage_to_player} damage!")
-        else:
+        if random.random() > (1 - min(0.75, self.player['eva'] * 0.015)):
             self.combat_log.append("✨ You evaded the attack!")
+        else:
+            if random.random() < 0.10:
+                damage_to_player = int(damage_to_player * 1.5)
+                self.combat_log.append(f"💥 CRITICAL HIT! Monster deals {damage_to_player} damage!")
+            else:
+                self.combat_log.append(f"☠️ Monster deals {damage_to_player} damage!")
+            
+            self.player['current_hp'] = max(0, self.player['current_hp'] - damage_to_player)
 
     async def end_combat(self):
         if self.player['current_hp'] <= 0:
@@ -550,12 +565,21 @@ class CombatSystem:
         
     async def _send_victory_message(self, exp_gained, loot, level_up_message):
         victory_embed = discord.Embed(title="🎉 Victory!", color=discord.Color.green())
+        next_monster_text = (
+            f"\n**Next Monster:**\n"
+            f"👾 {self.next_monster.name}\n"
+            f"❤️ HP: {self.next_monster.hp} | "
+            f"⚔️ ATK: {self.next_monster.atk} | "
+            f"🛡️ DEF: {self.next_monster.def_}"
+        )
+        
         victory_embed.description = (
             f"You defeated the {self.monster.name}!\n\n"
             f"**Rewards:**\n"
             f"🔰 EXP: {exp_gained} ({self.player['current_exp']}/100)\n"
             f"💰 Coins: {loot['coins']}\n\n"
-            f"{level_up_message}"
+            f"{level_up_message}\n"
+            f"{next_monster_text}"
         )
         
         if loot['pots']:
@@ -709,6 +733,31 @@ class CombatSystem:
             color=discord.Color.blue()
         )
 
+        player_stats = (
+            f"**Your Stats:**\n"
+            f"❤️ HP: {self.player['current_hp']}/{self.player['max_hp']}\n"
+            f"⚔️ ATK: {self.player['atk']}\n"
+            f"🛡️ DEF: {self.player['def']}\n"
+        )
+        pot_embed.add_field(
+            name="Current Status",
+            value=player_stats,
+            inline=False
+        )
+
+        next_monster_text = (
+            f"**Next Monster:**\n"
+            f"👾 {self.next_monster.name}\n"
+            f"❤️ HP: {self.next_monster.hp} | "
+            f"⚔️ ATK: {self.next_monster.atk} | "
+            f"🛡️ DEF: {self.next_monster.def_}"
+        )
+        pot_embed.add_field(
+            name="Upcoming Enemy",
+            value=next_monster_text,
+            inline=False
+        )
+
         pot_sections = []
         for pot_name, quantity in self.player['pots'].items():
             if quantity > 0:
@@ -720,7 +769,13 @@ class CombatSystem:
                     continue
                 pot_sections.append(f"{desc} (x{quantity})")
         
-        pot_embed.description = "\n".join(pot_sections)
+        if pot_sections:
+            pot_embed.add_field(
+                name="Available Potions",
+                value="\n".join(pot_sections),
+                inline=False
+            )
+
         view = PotionButtons(self, self.player['pots'])
         
         try:
@@ -808,7 +863,7 @@ class CombatSystem:
             except discord.HTTPException as e:
                 print(f"Error deferring interaction: {e}")
         
-        await self.update_message(embed)
+        await self.update_message(embed, view=EndSessionButton())
 
 class CombatButtons(discord.ui.View):
     def __init__(self, combat_system):
@@ -855,8 +910,15 @@ class PotionButtons(discord.ui.View):
                 button.callback = self.create_callback(pot_name)
                 self.add_item(button)
 
+        continue_button = discord.ui.Button(
+            label="Continue Combat",
+            style=discord.ButtonStyle.success
+        )
+        continue_button.callback = self.continue_callback
+        self.add_item(continue_button)
+
         exit_button = discord.ui.Button(
-            label="Exit",
+            label="Exit Combat",
             style=discord.ButtonStyle.danger
         )
         exit_button.callback = self.exit_callback
@@ -867,6 +929,9 @@ class PotionButtons(discord.ui.View):
             await self.combat_system.use_potion(interaction, pot_name)
         return callback
 
+    async def continue_callback(self, interaction):
+        await self.combat_system.start_combat(interaction)
+
     async def exit_callback(self, interaction):
         await self.combat_system.end_combat_session(interaction)
 
@@ -874,11 +939,14 @@ class ShopSystem:
     def __init__(self, player_data):
         self.player = player_data
         self.message = None
-
+        
     def create_shop_embed(self):
         embed = discord.Embed(
             title="🏪 Item Shop",
-            description=f"Your Coins: 💰 {self.player['coins']}",
+            description=(
+                f"Your Coins: 💰 {self.player['coins']}\n"
+                f"Current EXP: 📊 {self.player['current_exp']}/100"
+            ),
             color=discord.Color.gold()
         )
 
@@ -923,40 +991,142 @@ class ShopSystem:
             await self.message.edit(embed=embed, view=view)
 
     async def purchase_item(self, interaction, item_id):
+        if not await self._validate_purchase(interaction, item_id):
+            return
+
+        self.player['coins'] -= self._get_item_price(item_id)
+        
+        if item_id == 'exp_pot':
+            await self._handle_exp_potion(interaction)
+        else:
+            await self._handle_regular_potion(interaction, item_id)
+
+    async def _validate_purchase(self, interaction, item_id):
         item_data = (GameData.SPECIAL_POTS.get(item_id) or 
                     GameData.POTS.get(item_id))
         
         if not item_data:
-            return
+            return False
             
         if self.player['coins'] < item_data['price']:
             await interaction.response.send_message(
                 "❌ Not enough coins!", 
                 ephemeral=True
             )
-            return
+            return False
+            
+        return True
 
-        self.player['coins'] -= item_data['price']
+    def _get_item_price(self, item_id):
+        item_data = (GameData.SPECIAL_POTS.get(item_id) or 
+                    GameData.POTS.get(item_id))
+        return item_data['price']
+
+    async def _handle_exp_potion(self, interaction):
+        initial_stats = self._apply_exp_potion()
+        level_up_message = self._create_level_up_message(initial_stats)
         
-        if item_id == 'exp_pot':
-            self.player['current_exp'] = min(
-                99, 
-                self.player['current_exp'] + item_data['value']
-            )
-        else:
-            if item_id not in self.player['pots']:
-                self.player['pots'][item_id] = 0
-            self.player['pots'][item_id] += 1
+        await self._save_and_show_exp_results(interaction, level_up_message)
 
+    def _apply_exp_potion(self):
+        initial_stats = None
+        self.player['current_exp'] += GameData.SPECIAL_POTS['exp_pot']['value']
+        
+        while self.player['current_exp'] >= 100:
+            if not initial_stats:
+                initial_stats = self._capture_current_stats()
+            
+            self._apply_level_up()
+            
+        return initial_stats
+
+    def _capture_current_stats(self):
+        return {
+            'atk': self.player['atk'],
+            'def': self.player['def'],
+            'eva': self.player['eva'],
+            'luk': self.player['luk'],
+            'level': self.player['level']
+        }
+
+    def _apply_level_up(self):
+        self.player['level'] += 1
+        self.player['current_exp'] -= 100
+        
+        stat_increases = {
+            'atk': 0.6,
+            'def': 0.7,
+            'eva': 0.4,
+            'luk': 0.3
+        }
+        
+        for stat, increase in stat_increases.items():
+            self.player[stat] = round(self.player[stat] + increase, 1)
+            if self.player[stat] % 1 == 0:
+                self.player[stat] = int(self.player[stat])
+
+    def _create_level_up_message(self, initial_stats):
+        if not initial_stats or self.player['level'] <= initial_stats['level']:
+            return None
+            
+        stat_changes = []
+        for stat in ['atk', 'def', 'eva', 'luk']:
+            if self.player[stat] != initial_stats[stat]:
+                stat_changes.append(
+                    f"{stat.upper()}: {initial_stats[stat]} → {self.player[stat]}"
+                )
+        
+        return (
+            "🎊 **LEVEL UP!**\n"
+            f"You are now level {self.player['level']}!\n"
+            f"**Stat Increases:**\n" +
+            "\n".join(stat_changes)
+        )
+
+    async def _handle_regular_potion(self, interaction, item_id):
+        if item_id not in self.player['pots']:
+            self.player['pots'][item_id] = 0
+        self.player['pots'][item_id] += 1
+        
+        await self._save_and_refresh_shop(interaction)
+
+    async def _save_and_show_exp_results(self, interaction, level_up_message):
+        self._save_player_data()
+        
+        if level_up_message:
+            embed = discord.Embed(
+                title="📊 Experience Potion Used!",
+                description=level_up_message,
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="Shop Status",
+                value=(
+                    f"Your Coins: 💰 {self.player['coins']}\n"
+                    f"Current EXP: 📊 {self.player['current_exp']}/100"
+                ),
+                inline=False
+            )
+            
+            await interaction.response.edit_message(
+                embed=embed,
+                view=ShopButtons(self)
+            )
+            
+            await asyncio.sleep(2)
+            await self.show_shop(interaction)
+        else:
+            await interaction.response.defer()
+            await self.show_shop(interaction)
+
+    def _save_player_data(self):
         with open(DBFILE, 'r+') as f:
             data = json.load(f)
             data[self.player['user_id']] = self.player
             f.seek(0)
             json.dump(data, f, indent=4)
             f.truncate()
-
-        await interaction.response.defer()
-        await self.show_shop(interaction)
 
 class ShopButtons(discord.ui.View):
     def __init__(self, shop_system):
@@ -999,6 +1169,95 @@ class ShopButtons(discord.ui.View):
 
     async def exit_callback(self, interaction):
         SessionManager.end_session(self.shop.player['user_id'])
+        await interaction.message.delete()
+
+class ProfileButtons(discord.ui.View):
+    def __init__(self, player_data):
+        super().__init__(timeout=None)
+        self.player = player_data
+        self.add_healing_buttons()
+
+    def add_healing_buttons(self):
+        heal_pot_count = self.player['pots'].get('heal_pot', 0)
+        greater_pot_count = self.player['pots'].get('hp_pot_plus', 0)
+
+        heal_button = discord.ui.Button(
+            label=f"Use Healing Pot ({heal_pot_count})",
+            style=discord.ButtonStyle.primary,
+            disabled=heal_pot_count == 0,
+            custom_id='heal_pot'
+        )
+        heal_button.callback = self.create_heal_callback('heal_pot')
+        
+        greater_button = discord.ui.Button(
+            label=f"Use Greater Healing ({greater_pot_count})",
+            style=discord.ButtonStyle.primary,
+            disabled=greater_pot_count == 0,
+            custom_id='hp_pot_plus'
+        )
+        greater_button.callback = self.create_heal_callback('hp_pot_plus')
+        
+        exit_button = discord.ui.Button(
+            label="Exit",
+            style=discord.ButtonStyle.danger
+        )
+        exit_button.callback = self.exit_callback
+        
+        self.add_item(heal_button)
+        self.add_item(greater_button)
+        self.add_item(exit_button)
+
+    def create_heal_callback(self, pot_type):
+        async def callback(interaction):
+            if self.player['pots'].get(pot_type, 0) > 0:
+                pot_data = (GameData.POTS.get(pot_type) or 
+                          GameData.SPECIAL_POTS.get(pot_type))
+                
+                heal_amount = pot_data['value']
+                old_hp = self.player['current_hp']
+                self.player['current_hp'] = min(self.player['max_hp'], 
+                                              old_hp + heal_amount)
+                self.player['pots'][pot_type] -= 1
+                
+                with open(DBFILE, 'r+') as f:
+                    data = json.load(f)
+                    data[self.player['user_id']] = self.player
+                    f.seek(0)
+                    json.dump(data, f, indent=4)
+                    f.truncate()
+                
+                embed = discord.Embed(title=f"{self.player['name']}'s Profile", color=discord.Color.blue())
+                embed.add_field(name="Level", value=self.player['level'], inline=True)
+                embed.add_field(name="HP", value=f"{self.player['current_hp']}/{self.player['max_hp']}", inline=True)
+                embed.add_field(name="EXP", value=self.player['current_exp'], inline=True)
+                embed.add_field(name="Attack", value=self.player['atk'], inline=True)
+                embed.add_field(name="Defense", value=self.player['def'], inline=True)
+                embed.add_field(name="Evasion", value=self.player['eva'], inline=True)
+                embed.add_field(name="Luck", value=self.player['luk'], inline=True)
+                embed.add_field(name="Coins", value=self.player['coins'], inline=True)
+                
+                pots = "\n".join([f"{pot}: {quantity}" for pot, quantity in self.player['pots'].items()])
+                embed.add_field(name="Potions", value=pots if pots else "None", inline=False)
+
+                embed.set_thumbnail(url=interaction.user.avatar.url)
+                embed.set_footer(text="Character Profile")
+
+                await interaction.response.edit_message(
+                    embed=embed,
+                    view=ProfileButtons(self.player)
+                )
+            
+        return callback
+
+    async def exit_callback(self, interaction):
+        await interaction.message.delete()
+
+class EndSessionButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+    @discord.ui.button(label="Okay", style=discord.ButtonStyle.primary)
+    async def okay_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.message.delete()
 
 @bot.tree.command(name="shop", description="Browse and purchase items")
@@ -1099,7 +1358,10 @@ async def profile(interaction: discord.Interaction):
     embed.set_thumbnail(url=interaction.user.avatar.url)
     embed.set_footer(text="Character Profile")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(
+        embed=embed,
+        view=ProfileButtons(char_data)
+    )
 
 @bot.tree.command(name="rankings", description="View the top 10 players")
 async def rankings(interaction: discord.Interaction):
@@ -1119,7 +1381,7 @@ async def rankings(interaction: discord.Interaction):
         medals = ["🥇", "🥈", "🥉"]
         
         for i, score in enumerate(scores, 1):
-            medal = medals[i-1] if i <= 3 else "👑"
+            medal = medals[i-1] if i <= 3 else "🌟"
             field_name = f"{medal} Rank #{i}"
             field_value = (
                 f"**{score['discord_name']}**\n"
