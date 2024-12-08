@@ -333,6 +333,13 @@ class CombatSystem:
         self.active_effects = {}
         self.message = None
         self.is_combat_ended = False
+        self.initial_stats = {
+            'level': self.player['level'],
+            'atk': self.player['atk'],
+            'def': self.player['def'],
+            'eva': self.player['eva'],
+            'luk': self.player['luk']
+        }
         self.generate_monster()
 
     def generate_monster(self):
@@ -456,31 +463,81 @@ class CombatSystem:
                 await self.message.edit(embed=embed, view=view)
             except discord.NotFound:
                 pass
+    
+    def calculate_exp_gain(self):
+        level_diff = self.monster.level - self.player['level']
+        base_exp = 10
         
+        if level_diff > 0:
+            exp_gain = base_exp * (1 + (level_diff * 0.5))
+        elif level_diff < 0:
+            exp_gain = max(1, base_exp * (1 + (level_diff * 0.3)))
+        else:
+            exp_gain = base_exp
+            
+        exp_gain *= (1 + (self.player['level'] * 0.1))
+        
+        return int(exp_gain)
+    
     async def handle_victory(self):
-        exp_gained = self.monster.level * 4
+        exp_gained = self.calculate_exp_gain()
         self.player['current_exp'] += exp_gained
-        level_up_message = ""
         
-        if self.player['current_exp'] >= 100:
-            self.player['level'] += 1
-            self.player['current_exp'] = 0
-            self.player['atk'] = round(self.player['atk'] + 0.6, 1)
-            self.player['def'] = round(self.player['def'] + 0.7, 1)
-            self.player['eva'] = round(self.player['eva'] + 0.4, 1)
-            self.player['luk'] = round(self.player['luk'] + 0.3, 1)
+        level_up_message = await self._process_level_up()
+        loot = self._process_loot()
+        await self._send_victory_message(exp_gained, loot, level_up_message)
+        
+    async def _process_level_up(self):
+        if self.player['current_exp'] < 100:
+            return ""
             
-            heal_amount = 40
-            old_hp = self.player['current_hp']
-            self.player['current_hp'] = min(self.player['max_hp'], old_hp + heal_amount)
-            
-            level_up_message = (
-                "🎊 **LEVEL UP!**\n"
-                f"You are now level {self.player['level']}!\n"
-                f"Your stats have increased!\n"
-                f"Healed for {heal_amount} HP!"
-            )
-
+        initial_stats = {
+            'atk': self.player['atk'],
+            'def': self.player['def'],
+            'eva': self.player['eva'],
+            'luk': self.player['luk']
+        }
+        
+        self._apply_level_up()
+        return self._create_level_up_message(initial_stats)
+        
+    def _apply_level_up(self):
+        self.player['level'] += 1
+        self.player['current_exp'] = 0
+        
+        stat_increases = {
+            'atk': 0.6,
+            'def': 0.7,
+            'eva': 0.4,
+            'luk': 0.3
+        }
+        
+        for stat, increase in stat_increases.items():
+            self.player[stat] = round(self.player[stat] + increase, 1)
+            if self.player[stat] % 1 == 0:
+                self.player[stat] = int(self.player[stat])
+        
+        heal_amount = 40
+        old_hp = self.player['current_hp']
+        self.player['current_hp'] = min(self.player['max_hp'], old_hp + heal_amount)
+        
+    def _create_level_up_message(self, initial_stats):
+        stat_changes = []
+        for stat in ['atk', 'def', 'eva', 'luk']:
+            if self.player[stat] != initial_stats[stat]:
+                stat_changes.append(
+                    f"{stat.upper()}: {initial_stats[stat]} → {self.player[stat]}"
+                )
+        
+        return (
+            "🎊 **LEVEL UP!**\n"
+            f"You are now level {self.player['level']}!\n"
+            f"**Stat Increases:**\n" +
+            "\n".join(stat_changes) + "\n" +
+            "Healed for 40 HP!"
+        )
+        
+    def _process_loot(self):
         loot = LootSystem.generate_loot(self.player['luk'])
         self.player['coins'] += loot['coins']
         
@@ -488,7 +545,10 @@ class CombatSystem:
             if pot not in self.player['pots']:
                 self.player['pots'][pot] = 0
             self.player['pots'][pot] += amount
-
+            
+        return loot
+        
+    async def _send_victory_message(self, exp_gained, loot, level_up_message):
         victory_embed = discord.Embed(title="🎉 Victory!", color=discord.Color.green())
         victory_embed.description = (
             f"You defeated the {self.monster.name}!\n\n"
@@ -569,6 +629,8 @@ class CombatSystem:
         return embed
 
     async def handle_player_death(self):
+        SessionManager.end_session(self.player['user_id'])
+        
         HighScoreSystem.record_score(
             self.player['user_id'],
             self.player['name'],
@@ -667,47 +729,25 @@ class CombatSystem:
             await self.message.edit(embed=pot_embed, view=view)
     
     async def end_combat_session(self, interaction=None):
+        self._cleanup_session()
+        summary_embed = await self._create_session_summary()
+        await self._send_session_summary(summary_embed, interaction)
+
+    def _cleanup_session(self):
         self.is_combat_ended = True
         self.active_effects.clear()
         SessionManager.end_session(self.player['user_id'])
-        
-        initial_exp = self.player['current_exp']
-        initial_level = self.player['level']
-        current_exp = self.player['current_exp']
-        current_level = self.player['level']
-        
-        exp_gained = current_exp - initial_exp
-        if current_level > initial_level:
-            exp_gained += 100
-        
-        summary_embed = discord.Embed(
-            title="⚔️ Combat Session Ended ⚔️",
-            color=discord.Color.blue()
-        )
-        
-        progress_text = [
-            "**Session Progress:**",
-            f"➤ Current Level: {current_level}",
-            f"➤ EXP Progress: {current_exp}/100",
-            f"➤ Total EXP Gained: {exp_gained}",
-            "",
-            "**Current Stats:**",
-            f"❤️ HP: {self.player['current_hp']}/{self.player['max_hp']}",
-            f"⚔️ ATK: {int(self.player['atk'])}",
-            f"🛡️ DEF: {int(self.player['def'])}",
-            f"💨 EVA: {self.player['eva']}",
-            f"🍀 LUK: {self.player['luk']}"
-        ]
-        
-        if current_level > initial_level:
-            progress_text.insert(3, f"➤ Levels Gained: {current_level - initial_level}")
-        
-        summary_embed.add_field(
-            name="📊 Progress Report",
-            value="\n".join(progress_text),
-            inline=False
-        )
-        
+
+    def _get_stat_progress(self):
+        stat_progress = []
+        for stat in ['atk', 'def', 'eva', 'luk']:
+            initial = self.initial_stats[stat]
+            current = self.player[stat]
+            if initial != current:
+                stat_progress.append(f"➤ {stat.upper()}: {initial} → {current}")
+        return stat_progress
+
+    def _get_inventory_text(self):
         inventory_text = [
             f"💰 Coins: {self.player['coins']}",
             "",
@@ -717,26 +757,58 @@ class CombatSystem:
         for pot_name, quantity in self.player['pots'].items():
             if quantity > 0:
                 inventory_text.append(f"🧪 {pot_name.replace('_', ' ').title()}: {quantity}")
+        return inventory_text
+
+    async def _create_session_summary(self):
+        current_level = self.player['level']
+        current_exp = self.player['current_exp']
+        levels_gained = current_level - self.initial_stats['level']
         
-        summary_embed.add_field(
+        embed = discord.Embed(
+            title="⚔️ Combat Session Ended ⚔️",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="📊 Progress Report",
+            value="\n".join([
+                "**Session Progress:**",
+                f"➤ Current Level: {current_level}",
+                f"➤ EXP Progress: {current_exp}/100",
+                f"➤ Levels Gained: {levels_gained}" if levels_gained > 0 else ""
+            ]),
+            inline=False
+        )
+        
+        if levels_gained > 0:
+            stat_progress = self._get_stat_progress()
+            if stat_progress:
+                embed.add_field(
+                    name="📈 Stat Progress",
+                    value="\n".join(stat_progress),
+                    inline=False
+                )
+        
+        inventory_text = self._get_inventory_text()
+        embed.add_field(
             name="🎒 Current Inventory",
             value="\n".join(inventory_text),
             inline=False
         )
         
-        summary_embed.set_footer(text="Thanks for playing! Use /combat to start a new session.")
-        
+        embed.set_footer(text="Thanks for playing! Use /combat to start a new session.")
+        return embed
+
+    async def _send_session_summary(self, embed, interaction):
         if interaction:
             try:
                 await interaction.response.defer()
-            except discord.InteractionResponded:
-                pass
-            except discord.NotFound:
+            except (discord.InteractionResponded, discord.NotFound):
                 pass
             except discord.HTTPException as e:
                 print(f"Error deferring interaction: {e}")
         
-        await self.update_message(summary_embed)
+        await self.update_message(embed)
 
 class CombatButtons(discord.ui.View):
     def __init__(self, combat_system):
