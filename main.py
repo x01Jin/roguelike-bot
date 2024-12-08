@@ -14,6 +14,25 @@ intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
+class SessionManager:
+    active_sessions = {}
+
+    @classmethod
+    def start_session(cls, user_id: str, session_type: str) -> bool:
+        if user_id in cls.active_sessions:
+            return False
+        cls.active_sessions[user_id] = session_type
+        return True
+
+    @classmethod
+    def end_session(cls, user_id: str):
+        if user_id in cls.active_sessions:
+            del cls.active_sessions[user_id]
+
+    @classmethod
+    def get_session(cls, user_id: str) -> str:
+        return cls.active_sessions.get(user_id)
+
 class GameData:
     POTS = {
         'heal_pot': {
@@ -618,6 +637,7 @@ class CombatSystem:
     async def end_combat_session(self, interaction=None):
         self.is_combat_ended = True
         self.active_effects.clear()
+        SessionManager.end_session(self.player['user_id'])
         
         initial_exp = self.player['current_exp']
         initial_level = self.player['level']
@@ -874,6 +894,7 @@ class ShopButtons(discord.ui.View):
         return callback
 
     async def exit_callback(self, interaction):
+        SessionManager.end_session(self.shop.player['user_id'])
         await interaction.message.delete()
 
 @bot.tree.command(name="shop", description="Browse and purchase items")
@@ -883,6 +904,21 @@ async def shop(interaction: discord.Interaction):
     if not Utils.user_has_character(user_id):
         await interaction.response.send_message(
             "Create a character first!", 
+            ephemeral=True
+        )
+        return
+
+    current_session = SessionManager.get_session(user_id)
+    if current_session:
+        await interaction.response.send_message(
+            f"You are currently in a {current_session} session. Complete or exit it first!", 
+            ephemeral=True
+        )
+        return
+
+    if not SessionManager.start_session(user_id, "shop"):
+        await interaction.response.send_message(
+            "You are already in a session!", 
             ephemeral=True
         )
         return
@@ -900,6 +936,21 @@ async def combat(interaction: discord.Interaction):
     
     if not Utils.user_has_character(user_id):
         await interaction.response.send_message("Create a character first!", ephemeral=True)
+        return
+
+    current_session = SessionManager.get_session(user_id)
+    if current_session:
+        await interaction.response.send_message(
+            f"You are currently in a {current_session} session. Complete or exit it first!", 
+            ephemeral=True
+        )
+        return
+
+    if not SessionManager.start_session(user_id, "combat"):
+        await interaction.response.send_message(
+            "You are already in a session!", 
+            ephemeral=True
+        )
         return
 
     with open(DBFILE, 'r') as f:
