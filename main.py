@@ -995,18 +995,24 @@ class ShopSystem:
         if not await self._validate_purchase(interaction, item_id):
             return
 
-        self.player['coins'] -= self._get_item_price(item_id)
-        
+        item_price = self._get_item_price(item_id)
+        self.player['coins'] -= item_price
+
         if item_id == 'exp_pot':
             await self._handle_exp_potion(interaction)
         else:
             await self._handle_regular_potion(interaction, item_id)
+            
+        self._save_player_data()
 
     async def _validate_purchase(self, interaction, item_id):
-        item_data = (GameData.SPECIAL_POTS.get(item_id) or 
-                    GameData.POTS.get(item_id))
+        item_data = GameData.SPECIAL_POTS.get(item_id) or GameData.POTS.get(item_id)
         
         if not item_data:
+            await interaction.response.send_message(
+                "❌ Invalid item!", 
+                ephemeral=True
+            )
             return False
             
         if self.player['coins'] < item_data['price']:
@@ -1089,7 +1095,8 @@ class ShopSystem:
             self.player['pots'][item_id] = 0
         self.player['pots'][item_id] += 1
         
-        await self._save_and_refresh_shop(interaction)
+        await interaction.response.defer()
+        await self.show_shop(interaction)
 
     async def _save_and_show_exp_results(self, interaction, level_up_message):
         self._save_player_data()
@@ -1120,6 +1127,10 @@ class ShopSystem:
         else:
             await interaction.response.defer()
             await self.show_shop(interaction)
+
+    async def _save_and_refresh_shop(self, interaction):
+        self._save_player_data()
+        await self.show_shop(interaction)
 
     def _save_player_data(self):
         with open(DBFILE, 'r+') as f:
